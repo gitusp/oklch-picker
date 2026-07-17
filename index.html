@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1c1c1e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>OKLCH Picker (L-lock / P3)</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { background:#1c1c1e; color:#eee; font-family:-apple-system,system-ui,sans-serif;
+         padding:12px; padding-top:max(12px, env(safe-area-inset-top)); user-select:none; }
+  h1 { font-size:14px; font-weight:600; color:#aaa; margin-bottom:10px; }
+  .preview { display:flex; gap:10px; align-items:stretch; margin-bottom:10px; }
+  #chip { width:92px; height:92px; border-radius:14px; border:1px solid #444; flex:none; }
+  .info { flex:1; display:flex; flex-direction:column; justify-content:center; gap:4px; }
+  #hex { font-size:26px; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:1px; }
+  #oklch { font-size:12px; color:#9a9a9f; font-variant-numeric:tabular-nums; }
+  #copystate { font-size:12px; color:#30d158; height:14px; }
+  .row { margin:10px 0 4px; font-size:12px; color:#9a9a9f; display:flex; justify-content:space-between; }
+  input[type=range] { width:100%; height:34px; }
+  #plane { width:100%; height:230px; border-radius:10px; touch-action:none; display:block; }
+  button { background:#2c2c2e; color:#eee; border:1px solid #3a3a3c; border-radius:9px;
+           padding:10px 0; font-size:13px; font-weight:600; }
+  button:active { background:#48484a; }
+  .paste { display:flex; gap:6px; margin-top:12px; }
+  .paste input { flex:1; background:#2c2c2e; border:1px solid #3a3a3c; border-radius:9px;
+                 color:#eee; font-size:15px; padding:10px 12px; font-family:ui-monospace,monospace; }
+  .paste button { flex:none; padding:10px 16px; }
+  .badge { font-size:10px; padding:1px 6px; border-radius:6px; background:#3a3a3c; color:#ffd60a; margin-left:6px; }
+  .mode { display:flex; gap:6px; margin-top:10px; }
+  .mode button { flex:1; }
+  .mode button.on { background:#0a84ff; border-color:#0a84ff; }
+</style>
+</head>
+<body>
+<h1>OKLCH ピッカー — Lロック / Display P3</h1>
+
+<div class="preview">
+  <div id="chip"></div>
+  <div class="info">
+    <div id="hex">#------</div>
+    <div id="oklch">L - C - H -</div>
+    <div id="copystate"></div>
+  </div>
+</div>
+
+<div class="row"><span>明度 L(ロック軸)</span><span id="lval"></span></div>
+<input type="range" id="lslider" min="0.05" max="0.99" step="0.005">
+
+<div class="row"><span>色相 × 彩度(タップ / ドラッグ)</span><span id="cval"></span></div>
+<canvas id="plane"></canvas>
+
+<div class="paste">
+  <input type="text" id="hexin" placeholder="hexを貼って逆引き (例 CF9781)"
+         autocapitalize="off" autocomplete="off" spellcheck="false" inputmode="text">
+  <button id="pastebtn">ペースト</button>
+</div>
+
+<div class="mode">
+  <button id="mp3" class="on">P3キャンバス用 hex</button>
+  <button id="msrgb">sRGBキャンバス用 hex</button>
+</div>
+
+<script>
+"use strict";
+// ---------- OKLCH -> linear P3 / sRGB ----------
+const M_SRGB_XYZ=[[0.41239079926595934,0.357584339383878,0.1804807884018343],
+[0.21263900587151027,0.715168678767756,0.07219231536073371],
+[0.01933081871559182,0.11919477979462598,0.9505321522496607]];
+const M_XYZ_P3=[[2.493496911941425,-0.9313836179191239,-0.40271078445071684],
+[-0.8294889695615747,1.7626640603183463,0.023624685841943577],
+[0.03584583024378447,-0.07617238926804182,0.9568845240076872]];
+const mv=(M,v)=>[M[0][0]*v[0]+M[0][1]*v[1]+M[0][2]*v[2],
+                 M[1][0]*v[0]+M[1][1]*v[1]+M[1][2]*v[2],
+                 M[2][0]*v[0]+M[2][1]*v[1]+M[2][2]*v[2]];
+function oklchLin(L,C,h,p3){
+  const hr=h*Math.PI/180, a=C*Math.cos(hr), b=C*Math.sin(hr);
+  const l_=L+0.3963377774*a+0.2158037573*b,
+        m_=L-0.1055613458*a-0.0638541728*b,
+        s_=L-0.0894841775*a-1.2914855480*b;
+  const l=l_**3, m=m_**3, s=s_**3;
+  const rgb=[ 4.0767416621*l-3.3077115913*m+0.2309699292*s,
+             -1.2684380046*l+2.6097574011*m-0.3413193965*s,
+             -0.0041960863*l-0.7034186147*m+1.7076147010*s];
+  return p3? mv(M_XYZ_P3, mv(M_SRGB_XYZ, rgb)) : rgb;
+}
+const inG=v=>v.every(x=>x>=-1e-7&&x<=1+1e-7);
+function cmax(L,h,p3){
+  if(!inG(oklchLin(L,0,h,p3))) return 0;
+  let lo=0,hi=0.5;
+  for(let i=0;i<28;i++){const m=(lo+hi)/2; inG(oklchLin(L,m,h,p3))?lo=m:hi=m;}
+  return lo;
+}
+const enc=x=>{x=Math.min(1,Math.max(0,x));return x<=0.0031308?12.92*x:1.055*x**(1/2.4)-0.055;};
+const hex2=x=>Math.round(enc(x)*255).toString(16).padStart(2,"0");
+
+// ---------- state ----------
+let st={L:0.73,C:0.09,h:40,p3:true};
+try{ Object.assign(st, JSON.parse(localStorage.getItem("oklchpk")||"{}")); }catch(e){}
+
+// ---------- plane rendering ----------
+const CMAX_AXIS=0.4;
+const plane=document.getElementById("plane");
+let ctx, planeP3=false;
+function setupCanvas(){
+  const dpr=Math.min(2,window.devicePixelRatio||1);
+  plane.width=Math.round(plane.clientWidth*dpr/2)*2;
+  plane.height=Math.round(plane.clientHeight*dpr);
+  try{ ctx=plane.getContext("2d",{colorSpace:"display-p3"}); planeP3=(ctx.getContextAttributes&&ctx.getContextAttributes().colorSpace==="display-p3"); }
+  catch(e){ ctx=plane.getContext("2d"); planeP3=false; }
+}
+function renderPlane(){
+  const W=plane.width,H=plane.height;
+  const img=ctx.createImageData(W,H,{colorSpace:planeP3?"display-p3":"srgb"});
+  const d=img.data;
+  for(let x=0;x<W;x++){
+    const h=x/W*360;
+    const cm=cmax(st.L,h,planeP3);
+    for(let y=0;y<H;y++){
+      const C=(1-y/H)*CMAX_AXIS;
+      const i=(y*W+x)*4;
+      if(C>cm){ d[i]=28;d[i+1]=28;d[i+2]=30;d[i+3]=255; continue; }
+      const lin=oklchLin(st.L,C,h,planeP3);
+      d[i]=Math.round(enc(lin[0])*255); d[i+1]=Math.round(enc(lin[1])*255);
+      d[i+2]=Math.round(enc(lin[2])*255); d[i+3]=255;
+    }
+  }
+  ctx.putImageData(img,0,0);
+  // marker
+  const mx=st.h/360*W, my=(1-st.C/CMAX_AXIS)*H;
+  ctx.beginPath(); ctx.arc(mx,my,7,0,7); ctx.strokeStyle="#fff"; ctx.lineWidth=2.5; ctx.stroke();
+  ctx.beginPath(); ctx.arc(mx,my,9,0,7); ctx.strokeStyle="#000"; ctx.lineWidth=1.5; ctx.stroke();
+}
+
+// ---------- UI update + clipboard ----------
+function currentHex(){
+  const lin=oklchLin(st.L,st.C,st.h,st.p3);
+  return "#"+hex2(lin[0])+hex2(lin[1])+hex2(lin[2]);
+}
+function update(copy){
+  st.C=Math.min(st.C, cmax(st.L,st.h,st.p3));
+  const hx=currentHex();
+  const chip=document.getElementById("chip");
+  chip.style.background=`oklch(${st.L} ${st.C} ${st.h})`;   // Safari: native oklch (P3対応)
+  const outSRGB=!inG(oklchLin(st.L,st.C,st.h,false));
+  document.getElementById("hex").textContent=hx;
+  document.getElementById("oklch").innerHTML=
+    `L ${st.L.toFixed(3)} / C ${st.C.toFixed(3)} / H ${Math.round(st.h)}°`+
+    (outSRGB?'<span class="badge">P3専用色</span>':"");
+  document.getElementById("lval").textContent=st.L.toFixed(3);
+  document.getElementById("cval").textContent="C "+st.C.toFixed(3);
+  localStorage.setItem("oklchpk",JSON.stringify(st));
+  if(copy){
+    const done=()=>{ const cs=document.getElementById("copystate");
+      cs.textContent="コピーしました → iPadでペースト"; setTimeout(()=>cs.textContent="",1800); };
+    if(navigator.clipboard&&navigator.clipboard.writeText)
+      navigator.clipboard.writeText(hx.slice(1)).then(done,()=>{});
+  }
+}
+
+// ---------- hex reverse lookup ----------
+const M_P3_XYZ=[[0.48657094864821615,0.26566769316909306,0.19821728523436247],
+[0.22897456406974878,0.6917385218365064,0.079286914093745],
+[0.0,0.04511338185890264,1.043944368900976]];
+const M_XYZ_SRGB=[[3.2409699419045226,-1.537383177570094,-0.4986107602930034],
+[-0.9692436362808796,1.8759675015077202,0.04155505740717559],
+[0.05563007969699366,-0.20397695888897652,1.0569715142428786]];
+const dec=x=>x<=0.04045?x/12.92:((x+0.055)/1.055)**2.4;
+const cbrt=x=>Math.sign(x)*Math.abs(x)**(1/3);
+function hexToOklch(str){
+  const m=str.trim().replace(/^#/,"").match(/^([0-9a-fA-F]{6})$/);
+  if(!m) return null;
+  let rgb=[0,2,4].map(i=>dec(parseInt(m[1].slice(i,i+2),16)/255));
+  if(st.p3) rgb=mv(M_XYZ_SRGB, mv(M_P3_XYZ, rgb));   // P3 hex -> lin sRGB
+  const l=cbrt(0.4122214708*rgb[0]+0.5363325363*rgb[1]+0.0514459929*rgb[2]),
+        mm=cbrt(0.2119034982*rgb[0]+0.6806995451*rgb[1]+0.1073969566*rgb[2]),
+        s=cbrt(0.0883024619*rgb[0]+0.2817188376*rgb[1]+0.6299787005*rgb[2]);
+  const L=0.2104542553*l+0.7936177850*mm-0.0040720468*s,
+        a=1.9779984951*l-2.4285922050*mm+0.4505937099*s,
+        b=0.0259040371*l+0.7827717662*mm-0.8086757660*s;
+  return {L:Math.min(0.99,Math.max(0.05,L)), C:Math.hypot(a,b),
+          h:(Math.atan2(b,a)*180/Math.PI+360)%360};
+}
+function applyHex(str){
+  const r=hexToOklch(str);
+  const cs=document.getElementById("copystate");
+  if(!r){ cs.textContent="hexが読めませんでした"; setTimeout(()=>cs.textContent="",1500); return; }
+  Object.assign(st,r); sl.value=st.L;
+  renderPlane(); update(false);
+  cs.textContent="逆引きしました(L "+st.L.toFixed(3)+")"; setTimeout(()=>cs.textContent="",1800);
+}
+
+// ---------- events ----------
+const sl=document.getElementById("lslider"); sl.value=st.L;
+sl.addEventListener("input",()=>{ st.L=parseFloat(sl.value); renderPlane(); update(false); });
+sl.addEventListener("change",()=>update(true));
+
+function planePick(ev,copy){
+  const r=plane.getBoundingClientRect();
+  const t=ev.touches?ev.touches[0]:ev;
+  st.h=Math.min(359.9,Math.max(0,(t.clientX-r.left)/r.width*360));
+  st.C=Math.min(CMAX_AXIS,Math.max(0,(1-(t.clientY-r.top)/r.height)*CMAX_AXIS));
+  renderPlane(); update(copy);
+}
+plane.addEventListener("touchstart",e=>{e.preventDefault();planePick(e,false);},{passive:false});
+plane.addEventListener("touchmove",e=>{e.preventDefault();planePick(e,false);},{passive:false});
+plane.addEventListener("touchend",e=>{update(true);});
+plane.addEventListener("mousedown",e=>planePick(e,true));
+
+const hexin=document.getElementById("hexin");
+const HEXRE=/^#?[0-9a-fA-F]{6}$/;
+hexin.addEventListener("input",()=>{ if(HEXRE.test(hexin.value.trim())) applyHex(hexin.value); });
+
+async function tryPasteFromClipboard(){
+  try{
+    const t=(await navigator.clipboard.readText()).trim();
+    if(HEXRE.test(t)){ hexin.value=t; applyHex(t); return true; }
+  }catch(e){}
+  return false;
+}
+document.getElementById("pastebtn").onclick=async()=>{
+  if(!await tryPasteFromClipboard()) hexin.focus();   // 権限が無い/hexでない → 手入力
+};
+
+// 画面のどこでもペースト:
+// 1) ペーストジェスチャ/⌘V はどこでも受ける
+document.addEventListener("paste",e=>{
+  const t=(e.clipboardData||window.clipboardData).getData("text").trim();
+  if(HEXRE.test(t)){ e.preventDefault(); hexin.value=t; applyHex(t); }
+});
+// 2) 操作UI以外の場所をタップ → クリップボードを読んでhexなら逆引き
+document.addEventListener("click",e=>{
+  if(e.target.closest("canvas,input,button")) return;
+  tryPasteFromClipboard();
+});
+
+const mp3=document.getElementById("mp3"), ms=document.getElementById("msrgb");
+mp3.onclick=()=>{st.p3=true; mp3.classList.add("on"); ms.classList.remove("on"); update(true);};
+ms.onclick=()=>{st.p3=false; ms.classList.add("on"); mp3.classList.remove("on"); update(true);};
+if(!st.p3){ms.classList.add("on");mp3.classList.remove("on");}
+
+setupCanvas(); renderPlane(); update(false);
+window.addEventListener("resize",()=>{setupCanvas();renderPlane();});
+if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+</script>
+</body>
+</html>
