@@ -155,11 +155,39 @@ function update(copy){
   document.getElementById("lval").textContent=st.L.toFixed(3);
   document.getElementById("cval").textContent="C "+st.C.toFixed(3);
   localStorage.setItem("oklchpk",JSON.stringify(st));
-  if(copy){
-    const done=()=>{ const cs=document.getElementById("copystate");
-      cs.textContent="コピーしました → iPadでペースト"; setTimeout(()=>cs.textContent="",1800); };
-    if(navigator.clipboard&&navigator.clipboard.writeText)
-      navigator.clipboard.writeText(hx.slice(1)).then(done,()=>{});
+  if(copy) copyHex();
+}
+
+// ---------- copy (iOS対応: 同期execCommand優先 + 失敗表示) ----------
+let copyMsgTm;
+function showCopyState(msg){
+  const cs=document.getElementById("copystate");
+  cs.textContent=msg; clearTimeout(copyMsgTm);
+  copyMsgTm=setTimeout(()=>cs.textContent="",1800);
+}
+function legacyCopy(text){
+  const ta=document.createElement("textarea");
+  ta.value=text; ta.setAttribute("readonly","");
+  ta.style.cssText="position:fixed;top:0;left:0;opacity:0;font-size:16px;";
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try{ ta.setSelectionRange(0,text.length); }catch(e){}
+  let ok=false;
+  try{ ok=document.execCommand("copy"); }catch(e){}
+  document.body.removeChild(ta);
+  return ok;
+}
+function copyHex(){
+  const text=currentHex().slice(1);
+  // 1) 同期コピー: ユーザージェスチャのコールスタック内で確実に動く
+  if(legacyCopy(text)){ showCopyState("コピーしました → iPadでペースト"); return; }
+  // 2) Clipboard API (失敗したら表示して知らせる)
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(
+      ()=>showCopyState("コピーしました → iPadでペースト"),
+      ()=>showCopyState("コピー失敗 — hex表示をタップ"));
+  }else{
+    showCopyState("コピー失敗 — hex表示をタップ");
   }
 }
 
@@ -239,9 +267,12 @@ document.addEventListener("paste",e=>{
 });
 // 2) 操作UI以外の場所をタップ → クリップボードを読んでhexなら逆引き
 document.addEventListener("click",e=>{
-  if(e.target.closest("canvas,input,button")) return;
+  if(e.target.closest("canvas,input,button,.preview")) return;
   tryPasteFromClipboard();
 });
+
+// hex表示タップでコピー (clickはiOSでクリップボード書き込みが最も確実に許可される)
+document.querySelector(".preview").addEventListener("click",()=>copyHex());
 
 const mp3=document.getElementById("mp3"), ms=document.getElementById("msrgb");
 mp3.onclick=()=>{st.p3=true; mp3.classList.add("on"); ms.classList.remove("on"); update(true);};
