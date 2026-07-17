@@ -204,13 +204,17 @@ function planePick(ev,copy){
   const r=plane.getBoundingClientRect();
   const t=ev.touches?ev.touches[0]:ev;
   st.h=Math.min(359.9,Math.max(0,(t.clientX-r.left)/r.width*360));
-  st.C=Math.min(CMAX_AXIS,Math.max(0,(1-(t.clientY-r.top)/r.height)*CMAX_AXIS));
+  const c=Math.min(CMAX_AXIS,Math.max(0,(1-(t.clientY-r.top)/r.height)*CMAX_AXIS));
+  st.C=Math.min(c, cmax(st.L,st.h,planeP3));   // 色の領域(ガンマット)を上限にクランプ
   renderPlane(); update(copy);
 }
 plane.addEventListener("touchstart",e=>{e.preventDefault();planePick(e,false);},{passive:false});
 plane.addEventListener("touchmove",e=>{e.preventDefault();planePick(e,false);},{passive:false});
 plane.addEventListener("touchend",e=>{update(true);});
-plane.addEventListener("mousedown",e=>planePick(e,true));
+let dragging=false;
+plane.addEventListener("mousedown",e=>{dragging=true;planePick(e,false);});
+window.addEventListener("mousemove",e=>{if(dragging)planePick(e,false);});
+window.addEventListener("mouseup",()=>{if(dragging){dragging=false;update(true);}});
 
 const hexin=document.getElementById("hexin");
 const HEXRE=/^#?[0-9a-fA-F]{6}$/;
